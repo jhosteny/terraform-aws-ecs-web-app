@@ -62,6 +62,18 @@ variable "container_memory" {
   default     = 512
 }
 
+variable "task_cpu" {
+  type        = number
+  description = "The number of CPU units used by the task. If unspecified, it will default to `container_cpu`. If using `FARGATE` launch type `task_cpu` must match supported memory values (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#task_size)"
+  default     = null
+}
+
+variable "task_memory" {
+  type        = number
+  description = "The amount of memory (in MiB) used by the task. If unspecified, it will default to `container_memory`. If using Fargate launch type `task_memory` must match supported cpu value (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#task_size)"
+  default     = null
+}
+
 variable "container_memory_reservation" {
   type        = number
   description = "The amount of RAM (Soft Limit) to allow container to use in MB. This value must be less than `container_memory` if set"
@@ -92,6 +104,18 @@ variable "port_mappings" {
   ]
 }
 
+variable "ulimits" {
+  type = list(object({
+    name      = string
+    softLimit = number
+    hardLimit = number
+  }))
+
+  description = "The ulimits to configure for the container. This is a list of maps. Each map should contain \"name\", \"softLimit\" and \"hardLimit\""
+
+  default = []
+}
+
 variable "desired_count" {
   type        = number
   description = "The desired number of tasks to start with. Set this to 0 if using DAEMON Service type. (FARGATE does not suppoert DAEMON Service type)"
@@ -102,6 +126,28 @@ variable "launch_type" {
   type        = string
   description = "The ECS launch type (valid options: FARGATE or EC2)"
   default     = "FARGATE"
+}
+
+variable "network_mode" {
+  type        = string
+  description = "The network mode to use for the task. This is required to be `awsvpc` for `FARGATE` `launch_type`"
+  default     = "awsvpc"
+}
+
+variable "volumes" {
+  type = list(object({
+    host_path = string
+    name      = string
+    docker_volume_configuration = list(object({
+      autoprovision = bool
+      driver        = string
+      driver_opts   = map(string)
+      labels        = map(string)
+      scope         = string
+    }))
+  }))
+  description = "Task volume definitions as list of configuration objects"
+  default     = []
 }
 
 variable "environment" {
@@ -119,6 +165,18 @@ variable "secrets" {
     valueFrom = string
   }))
   description = "The secrets to pass to the container. This is a list of maps"
+  default     = null
+}
+
+variable "entrypoint" {
+  type        = list(string)
+  description = "The entry point that is passed to the container"
+  default     = null
+}
+
+variable "command" {
+  type        = list(string)
+  description = "The command that is passed to the container"
   default     = null
 }
 
@@ -212,6 +270,12 @@ variable "alb_security_group" {
   description = "Security group of the ALB"
 }
 
+variable "use_alb_security_group" {
+  type        = bool
+  description = "A boolean to enable adding an ALB security group rule for the service task"
+  default     = false
+}
+
 variable "alb_ingress_healthcheck_path" {
   type        = string
   description = "The path of the healthcheck which the ALB checks"
@@ -252,6 +316,12 @@ variable "alb_ingress_authenticated_paths" {
   type        = list(string)
   default     = []
   description = "Authenticated path pattern to match (a maximum of 1 can be defined)"
+}
+
+variable "nlb_ingress_target_group_arn" {
+  type        = string
+  description = "Target group ARN of the NLB ingress"
+  default     = ""
 }
 
 variable "vpc_id" {
@@ -649,4 +719,13 @@ variable "codepipeline_s3_bucket_force_destroy" {
   type        = bool
   description = "A boolean that indicates all objects should be deleted from the CodePipeline artifact store S3 bucket so that the bucket can be destroyed without error"
   default     = false
+}
+
+variable "init_containers" {
+  type = list(object({
+    container_definition  = any
+    condition             = string
+  }))
+  description = "A list of additional init containers to start. The map contains the container_definition (JSON) and the main container's dependency condition (string) on the init container. The latter can be one of START, COMPLETE, SUCCESS or HEALTHY."
+  default     = []
 }

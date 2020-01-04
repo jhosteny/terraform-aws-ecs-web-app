@@ -59,7 +59,8 @@ module "alb_ingress" {
 }
 
 module "container_definition" {
-  source                       = "git::https://github.com/cloudposse/terraform-aws-ecs-container-definition.git?ref=tags/0.21.0"
+  #source                       = "git::https://github.com/cloudposse/terraform-aws-ecs-container-definition.git?ref=tags/0.21.0"
+  source                       = "/home/jhosteny/src/github/jhosteny/terraform-aws-ecs-container-definition"
   container_name               = module.default_label.id
   container_image              = var.container_image
   container_memory             = var.container_memory
@@ -69,6 +70,11 @@ module "container_definition" {
   environment                  = var.environment
   port_mappings                = var.port_mappings
   secrets                      = var.secrets
+  ulimits                      = var.ulimits
+  entrypoint                   = var.entrypoint
+  command                      = var.command
+  container_depends_on         = local.container_depends_on
+  mount_points                 = local.init_mount_points
 
   log_configuration = {
     logDriver = var.log_driver
@@ -81,18 +87,72 @@ module "container_definition" {
   }
 }
 
+locals {
+    alb = {
+      container_name   = module.default_label.id
+      container_port   = var.container_port
+      elb_name         = null
+      target_group_arn = module.alb_ingress.target_group_arn
+    }
+    nlb = {
+      container_name   = module.default_label.id
+      container_port   = var.nlb_container_port
+      elb_name         = null
+      target_group_arn = var.nlb_ingress_target_group_arn
+    }
+    load_balancers = var.nlb_ingress_target_group_arn != "" ? [local.alb, local.nlb] : [local.alb]
+
+    init_container_definitions = [
+      for init_container in var.init_containers : lookup(init_container, "container_definition")
+    ]
+
+    container_depends_on = [
+      for init_container in var.init_containers :
+      {
+        containerName = lookup(jsondecode(init_container.container_definition), "name"),
+        condition     = init_container.condition
+      }
+    ]
+
+    init_source_volumes = distinct(flatten([
+      for init_container in var.init_containers : [
+        for mount_point in coalesce(lookup(jsondecode(init_container.container_definition), "mountPoints"), []) : [
+          lookup(mount_point, "sourceVolume")
+        ]
+      ]
+    ]))
+
+    init_volumes = [
+      for init_source_volume in local.init_source_volumes :
+      {
+        name                        = init_source_volume,
+        host_path                   = null,
+        docker_volume_configuration = []
+      }
+    ]
+
+    init_mount_points = flatten([
+      for init_container in var.init_containers : [
+        coalesce(lookup(jsondecode(init_container.container_definition), "mountPoints"), [])
+      ]
+    ])
+
+    final_volumes = concat(var.volumes, local.init_volumes)
+}
+
 module "ecs_alb_service_task" {
-  source                            = "git::https://github.com/cloudposse/terraform-aws-ecs-alb-service-task.git?ref=tags/0.17.0"
+  source                            = "git::https://github.com/cloudposse/terraform-aws-ecs-alb-service-task.git?ref=tags/0.19.0"
   name                              = var.name
   namespace                         = var.namespace
   stage                             = var.stage
   attributes                        = var.attributes
   alb_security_group                = var.alb_security_group
-  container_definition_json         = module.container_definition.json
+  use_alb_security_group            = var.use_alb_security_group
+  container_definition_json         = "[${join(",", concat(local.init_container_definitions, [module.container_definition.json_map]))}]"
   desired_count                     = var.desired_count
   health_check_grace_period_seconds = var.health_check_grace_period_seconds
-  task_cpu                          = var.container_cpu
-  task_memory                       = var.container_memory
+  task_cpu                          = coalesce(var.task_cpu, var.container_cpu)
+  task_memory                       = coalesce(var.task_memory, var.container_memory)
   ecs_cluster_arn                   = var.ecs_cluster_arn
   launch_type                       = var.launch_type
   vpc_id                            = var.vpc_id
@@ -100,14 +160,9 @@ module "ecs_alb_service_task" {
   subnet_ids                        = var.ecs_private_subnet_ids
   container_port                    = var.container_port
   tags                              = var.tags
-
-  ecs_load_balancers = [
-    {
-      container_name   = module.default_label.id
-      container_port   = var.container_port
-      elb_name         = null
-      target_group_arn = module.alb_ingress.target_group_arn
-  }]
+  ecs_load_balancers                = local.load_balancers
+  network_mode                      = var.network_mode
+  volumes                           = local.final_volumes
 }
 
 module "ecs_codepipeline" {
